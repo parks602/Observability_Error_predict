@@ -4,24 +4,30 @@ Runner module for model training and prediction.
 
 from typing import Dict, Any
 import pandas as pd
-
+from datetime import datetime, timedelta
 from .rf_model import RFClassificationPieline
 from ..alert.dooray import dooray_notify
 from ..database.connector import MariaDBHandler
 
 
 # Constants
-PREDICTION_TABLE = "test_table"
+PREDICTION_TABLE = "predict_data"
 PREDICTION_TABLE_SCHEMA = """
-    id           INT AUTO_INCREMENT PRIMARY KEY,
-    predict_time DATETIME NOT NULL,
-    code         VARCHAR(100),
-    svc_type     VARCHAR(100),
-    svr_type     VARCHAR(100),
-    instance     VARCHAR(100),
-    object       VARCHAR(100),
-    number       FLOAT
-"""
+    id BIGINT NOT NULL AUTO_INCREMENT,
+    predict_start_at DATETIME NOT NULL,
+    failure_at DATETIME NULL,
+    host_ip VARCHAR(45) NOT NULL,
+    host_name VARCHAR(100) NOT NULL,
+    code VARCHAR(50) NOT NULL,
+    game_type VARCHAR(50) NOT NULL,
+    world VARCHAR(50),
+    svc_type VARCHAR(50) NOT NULL,
+    svr_type VARCHAR(50) NOT NULL,
+    instance VARCHAR(100) NOT NULL,
+    object VARCHAR(50) NOT NULL,
+    current_value DOUBLE NOT NULL,
+    PRIMARY KEY (id)
+    """
 
 
 def train_model(
@@ -58,7 +64,7 @@ def predict_data(
     alert_config: Dict[str, Any],
     server_info: Dict[str, str],
     handler: MariaDBHandler,
-    conditions: Dict[str, str],
+    unique_row: pd.Series,
 ) -> None:
     """
     Make predictions using a trained model and handle alerts.
@@ -103,7 +109,7 @@ def predict_data(
             alert_config,
             server_info,
             handler,
-            conditions,
+            unique_row,
             pred_object,
             threshold,
         )
@@ -132,6 +138,7 @@ def _build_prediction_result(
     return {
         "object_value": pred_object,
         "timestamp": latest["timestamp"],
+        "fail_time": latest["timestamp"] + pd.Timedelta("1H"),
         "current_value": float(latest["current_value"]),
         "probability": float(latest["probability"]),
         "prediction": int(latest["prediction"]),
@@ -147,23 +154,30 @@ def _handle_high_risk_prediction(
     alert_config: Dict[str, Any],
     server_info: Dict[str, str],
     handler: MariaDBHandler,
-    conditions: Dict[str, str],
+    unique_row: pd.Series,
     pred_object: str,
     threshold: float,
 ) -> None:
     """Handle high-risk prediction by sending alerts and storing in database."""
     # Send alert
-    dooray_notify(prediction_result, alert_config, server_info, threshold, conditions)
+    if pd.isna(unique_row["WORLD"]):
+        unique_row["WORLD"] = ""
+    dooray_notify(prediction_result, alert_config, server_info, threshold, unique_row)
 
     # Prepare data for database
     insert_data = {
-        "predict_time": prediction_result["timestamp"],
-        "code": conditions["CODE"],
-        "svc_type": conditions["SVC_TYPE"],
-        "svr_type": conditions["SVR_TYPE"],
-        "instance": conditions["INSTANCE"],
+        "predict_start_at": prediction_result["timestamp"],
+        "failure_at": prediction_result["fail_time"],
+        "host_ip": server_info["host_ip"],
+        "host_name": server_info["host_name"],
+        "code": unique_row["CODE"],
+        "game_type": unique_row["GAME_TYPE"],
+        "world": unique_row["WORLD"],
+        "svc_type": unique_row["SVC_TYPE"],
+        "svr_type": unique_row["SVR_TYPE"],
+        "instance": unique_row["INSTANCE"],
         "object": pred_object,
-        "number": prediction_result["current_value"],
+        "current_value": prediction_result["current_value"],
     }
 
     # Store in database
@@ -188,3 +202,4 @@ def _log_normal_prediction(prediction_result: Dict[str, Any], threshold: float) 
         f"Threshold: {threshold:.2f}, "
         f"Probability: {prediction_result['probability']:.2f}"
     )
+    print("=" * 70 + "\n")

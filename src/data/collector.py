@@ -44,16 +44,25 @@ class Collector:
         self,
         metric_name: str,
         code: str,
+        game_type: str,
         instance: str,
         svc_type: str,
         svr_type: str,
+        world: str,
     ) -> Dict[str, List[str]]:
         """Query metric labels from Prometheus."""
-        query = (
-            f"{metric_name}{{"
-            f'CODE="{code}",INSTANCE="{instance}",'
-            f'SVC_TYPE="{svc_type}",SVR_TYPE="{svr_type}"}}'
-        )
+        if pd.notna(world):
+            query = (
+                f"{metric_name}{{"
+                f'CODE="{code}",GAME_TYPE="{game_type}",INSTANCE="{instance}",'
+                f'SVC_TYPE="{svc_type}",SVR_TYPE="{svr_type}",WORLD="{world}"}}'
+            )
+        else:
+            query = (
+                f"{metric_name}{{"
+                f'CODE="{code}",GAME_TYPE="{game_type}",INSTANCE="{instance}",'
+                f'SVC_TYPE="{svc_type}",SVR_TYPE="{svr_type}"}}'
+            )
         url = f"{self.api_endpoint}/query"
 
         try:
@@ -68,6 +77,7 @@ class Collector:
                 excluded_labels = {
                     "__name__",
                     "CODE",
+                    "GAME_TYPE",
                     "INSTANCE",
                     "SVC_TYPE",
                     "SVR_TYPE",
@@ -112,73 +122,57 @@ class Collector:
 
 def collect_train_data(
     target_object: str,
-    instances: List[str],
-    instances_ids: List[int],
+    server_map: pd.DataFrame,
     prometheus_url: str,
     end_time: datetime,
     window_size: int,
     code: str,
+    game_type: str,
     svc_type: str,
     svr_type: str,
+    world: str,
 ) -> pd.DataFrame:
     """Collect training data for multiple instances."""
     start_time = end_time - timedelta(days=window_size)
     collector = Collector(prometheus_url)
 
     all_data = []
+    filtered_df = server_map[
+        (server_map["CODE"] == code)
+        & (server_map["GAME_TYPE"] == game_type)
+        & (server_map["SVC_TYPE"] == svc_type)
+    ]
+    for _, unique_row in filtered_df.iterrows():
+        svr_type = unique_row["SVR_TYPE"]
+        svr_id = unique_row["svr_id"]
+        world = unique_row["WORLD"]
+        word_id = unique_row["world_id"]
+        instance = unique_row["INSTANCE"]
+        instance_id = unique_row["instance_id"]
 
-    for instance, instance_id in zip(instances, instances_ids):
-        filter_query = _create_filter_query(code, instance, svc_type, svr_type)
-
+        filter_query = _create_filter_query(
+            code, game_type, instance, svc_type, svr_type, world
+        )
         data = _collect_data(
             collector=collector,
             target_object=target_object,
             filter_query=filter_query,
             code=code,
+            game_type=game_type,
             instance=instance,
             svc_type=svc_type,
             svr_type=svr_type,
+            world=world,
             start_time=start_time,
             end_time=end_time,
             window_size=window_size,
+            svr_id=svr_id,
+            world_id=word_id,
             instance_id=instance_id,
         )
-
         all_data.append(data)
 
     return pd.concat(all_data, axis=0, ignore_index=True)
-
-
-# def collect_predict_data(
-#     target_object: str,
-#     instance: str,
-#     instance_id: int,
-#     prometheus_url: str,
-#     end_time: datetime,
-#     window_size: int,
-#     code: str,
-#     svc_type: str,
-#     svr_type: str,
-# ) -> pd.DataFrame:
-#     """Collect prediction data for a single instance."""
-#     start_time = end_time - timedelta(days=window_size)
-#     collector = Collector(prometheus_url)
-#     filter_query = _create_filter_query(code, instance, svc_type, svr_type)
-
-#     data = _collect_data(
-#         collector=collector,
-#         target_object=target_object,
-#         filter_query=filter_query,
-#         code=code,
-#         instance=instance,
-#         svc_type=svc_type,
-#         svr_type=svr_type,
-#         start_time=start_time,
-#         end_time=end_time,
-#         window_size=window_size,
-#         instance_id=instance_id,
-#     )
-#     return data.reset_index(drop=True)
 
 
 def collect_predict_data(
@@ -189,54 +183,56 @@ def collect_predict_data(
     end_time: datetime,
     window_size: int,
     code: str,
+    game_type: str,
     svc_type: str,
     svr_type: str,
+    world: str,
+    svr_id: int,
+    world_id: int,
 ) -> pd.DataFrame:
     """Collect prediction data for a single instance."""
-    print(f"\n{'='*70}")
-    print(f"[DEBUG] collect_predict_data started")
-    print(f"{'='*70}")
-    print(f"  Target: {target_object}")
-    print(f"  Instance: {instance} (ID: {instance_id})")
-    print(f"  Code: {code}, SvcType: {svc_type}, SvrType: {svr_type}")
-    print(f"  End time: {end_time}")
-    print(f"  Window size: {window_size} day(s)")
-    print(f"{'='*70}\n")
 
     start_time = end_time - timedelta(days=window_size)
     collector = Collector(prometheus_url)
-    filter_query = _create_filter_query(code, instance, svc_type, svr_type)
-
-    print(f"[DEBUG] Filter query: {filter_query}")
-    print(f"[DEBUG] Time range: {start_time} ~ {end_time}\n")
+    filter_query = _create_filter_query(
+        code, game_type, instance, svc_type, svr_type, world
+    )
 
     data = _collect_data(
         collector=collector,
         target_object=target_object,
         filter_query=filter_query,
         code=code,
+        game_type=game_type,
         instance=instance,
         svc_type=svc_type,
         svr_type=svr_type,
+        world=world,
         start_time=start_time,
         end_time=end_time,
         window_size=window_size,
+        svr_id=svr_id,
+        world_id=world_id,
         instance_id=instance_id,
     )
-
-    print(f"[DEBUG] Data collected. Shape: {data.shape}")
-    print(f"[DEBUG] Columns: {list(data.columns)[:5]}... ({len(data.columns)} total)")
-    print(f"[DEBUG] collect_predict_data completed\n")
 
     return data.reset_index(drop=True)
 
 
-def _create_filter_query(code: str, instance: str, svc_type: str, svr_type: str) -> str:
+def _create_filter_query(
+    code: str, game_type: str, instance: str, svc_type: str, svr_type: str, world: str
+) -> str:
     """Create Prometheus filter query string."""
-    return (
-        f'CODE="{code}",INSTANCE="{instance}",'
-        f'SVC_TYPE="{svc_type}",SVR_TYPE="{svr_type}"'
-    )
+    if not pd.isna(world):
+        return (
+            f'CODE="{code}",GAME_TYPE="{game_type}",INSTANCE="{instance}",'
+            f'SVC_TYPE="{svc_type}",SVR_TYPE="{svr_type}",WORLD="{world}"'
+        )
+    else:
+        return (
+            f'CODE="{code}",GAME_TYPE="{game_type}",INSTANCE="{instance}",'
+            f'SVC_TYPE="{svc_type}",SVR_TYPE="{svr_type}"'
+        )
 
 
 def _get_queries(
@@ -244,14 +240,22 @@ def _get_queries(
     filter_query: str,
     collector: Collector,
     code: str,
+    game_type: str,
     instance: str,
     svc_type: str,
     svr_type: str,
+    world: str,
 ) -> Dict[str, str]:
     """Get appropriate queries based on target object."""
     if target_object == "cpu":
         cpu_time_labels = collector.get_metric_labels(
-            "system_cpu_time_seconds_total", code, instance, svc_type, svr_type
+            "system_cpu_time_seconds_total",
+            code,
+            game_type,
+            instance,
+            svc_type,
+            svr_type,
+            world,
         )
         states = cpu_time_labels.get("state", [])
 
@@ -274,10 +278,9 @@ def _create_data_filepath(
     output_dir: str,
     target_object: str,
     code: str,
+    game_type: str,
     svc_type: str,
-    svr_type: str,
     end_time: datetime,
-    instance: Optional[str] = None,
     is_training: bool = True,
 ) -> str:
     """Generate standardized data file path."""
@@ -287,10 +290,10 @@ def _create_data_filepath(
 
     if is_training:
         filename = (
-            f"{code}_{svc_type}_{svr_type}_{end_time.year}_{end_time.month}_data.csv"
+            f"{code}_{game_type}_{svc_type}_{end_time.year}_{end_time.month}_data.csv"
         )
     else:
-        filename = f"{code}_{svc_type}_{svr_type}_{instance}_data.csv"
+        filename = f"{code}_{game_type}_{svc_type}_data.csv"
 
     return os.path.join(base_path, filename)
 
@@ -300,72 +303,74 @@ def _collect_data(
     target_object: str,
     filter_query: str,
     code: str,
+    game_type: str,
     instance: str,
     svc_type: str,
     svr_type: str,
+    world: str,
     start_time: datetime,
     end_time: datetime,
     window_size: int,
+    svr_id: int,
+    world_id: int,
     instance_id: int,
-    output_dir: str = "./data",
 ) -> pd.DataFrame:
     """Core data collection logic."""
     # Get queries
     queries = _get_queries(
-        target_object, filter_query, collector, code, instance, svc_type, svr_type
+        target_object,
+        filter_query,
+        collector,
+        code,
+        game_type,
+        instance,
+        svc_type,
+        svr_type,
+        world,
     )
 
     # Determine if this is training or prediction
     is_training = window_size > 1
 
-    # Generate file path
-    file_path = _create_data_filepath(
-        output_dir,
-        target_object,
-        code,
-        svc_type,
-        svr_type,
-        end_time,
-        instance,
-        is_training,
-    )
-
     # Handle training data collection
     if is_training:
         return _collect_training_data(
-            file_path,
             queries,
             collector,
             start_time,
             end_time,
             window_size,
+            svr_id,
+            world_id,
             instance_id,
             target_object,
         )
 
     # Handle prediction data collection
     return _collect_prediction_data(
-        file_path, queries, collector, start_time, end_time, instance_id, target_object
+        queries,
+        collector,
+        start_time,
+        end_time,
+        instance_id,
+        target_object,
+        svr_id,
+        world_id,
     )
 
 
 def _collect_training_data(
-    file_path: str,
     queries: Dict[str, str],
     collector: Collector,
     start_time: datetime,
     end_time: datetime,
     window_size: int,
+    svr_id: int,
+    world_id: int,
     instance_id: int,
     target_object: str,
 ) -> pd.DataFrame:
     """Collect and save training data."""
-    # Check if data already exists
-    if os.path.exists(file_path):
-        logger.info(f"Loading existing training data from {file_path}")
-        df = pd.read_csv(file_path)
-        df["timestamp"] = pd.to_datetime(df["timestamp"])
-        return df
 
     # Collect new data day by day
     all_data = {}
@@ -398,174 +403,47 @@ def _collect_training_data(
 
     # Convert to DataFrame and process
     df = _convert_to_dataframe(all_data)
-    df = _add_instance_column(df, instance_id)
+    df = _add_instance_column(df, svr_id, world_id, instance_id)
     df = _apply_feature_engineering(df, target_object)
-
-    # Save to file
-    df.to_csv(file_path, index=False)
-    logger.info(f"Saved training data to {file_path}")
 
     return df
 
 
-# def _collect_prediction_data(
-#     file_path: str,
-#     queries: Dict[str, str],
-#     collector: Collector,
-#     start_time: datetime,
-#     end_time: datetime,
-#     instance_id: int,
-#     target_object: str,
-# ) -> pd.DataFrame:
-#     """Collect and update prediction data."""
-#     print("do this")
-#     if not os.path.exists(file_path):
-#         # No existing data - collect initial window
-#         return _collect_initial_prediction_data(
-#             file_path, queries, collector, end_time, instance_id, target_object
-#         )
-
-#     # Load existing data
-#     existing_df = pd.read_csv(file_path)
-#     if existing_df.shape[0] == 0:
-#         # No existing data - collect initial window
-#         return _collect_initial_prediction_data(
-#             file_path, queries, collector, end_time, instance_id, target_object
-#         )
-
-#     existing_df["timestamp"] = pd.to_datetime(existing_df["timestamp"])
-#     max_time = existing_df["timestamp"].max()
-
-#     time_diff = end_time - max_time
-#     # Check if we need to update
-#     if time_diff > timedelta(minutes=2):
-#         logger.info("Time gap too large. Collecting new 120-minute window.")
-#         return _recollect_prediction_window(
-#             file_path, queries, collector, end_time, instance_id, target_object
-#         )
-
-#     if timedelta(minutes=1) < time_diff <= timedelta(minutes=2):
-#         logger.info("Updating with latest data point.")
-#         return _update_prediction_data(
-#             file_path,
-#             existing_df,
-#             queries,
-#             collector,
-#             end_time,
-#             instance_id,
-#             target_object,
-#         )
-
-#     logger.info("Data is already up to date.")
-#     return existing_df
-
-
 def _collect_prediction_data(
-    file_path: str,
     queries: Dict[str, str],
     collector: Collector,
     start_time: datetime,
     end_time: datetime,
     instance_id: int,
     target_object: str,
+    svr_id: int,
+    world_id: int,
 ) -> pd.DataFrame:
     """Collect and update prediction data."""
-    print(f"[DEBUG] _collect_prediction_data called")
-    print(f"[DEBUG] File path: {file_path}")
-    print(f"[DEBUG] File exists: {os.path.exists(file_path)}")
 
     return _collect_initial_prediction_data(
-        file_path, queries, collector, end_time, instance_id, target_object
+        queries,
+        collector,
+        end_time,
+        instance_id,
+        target_object,
+        svr_id,
+        world_id,
     )
-
-    # # Load existing data
-    # print(f"[DEBUG] Loading existing data from {file_path}")
-    # existing_df = pd.read_csv(file_path)
-
-    # if existing_df.shape[0] == 0:
-    #     print(f"[DEBUG] file is empty. Collecting initial 61-minute window...")
-    #     # No existing data - collect initial window
-    #     return _collect_initial_prediction_data(
-    #         file_path, queries, collector, end_time, instance_id, target_object
-    #     )
-
-    # existing_df["timestamp"] = pd.to_datetime(existing_df["timestamp"])
-    # max_time = existing_df["timestamp"].max()
-
-    # time_diff = end_time - max_time
-
-    # print(f"[DEBUG] Existing data info:")
-    # print(f"  - Last timestamp: {max_time}")
-    # print(f"  - Current time: {end_time}")
-    # print(f"  - Time difference: {time_diff}")
-    # print(f"  - Existing rows: {len(existing_df)}")
-
-    # # Check if we need to update
-    # if time_diff > timedelta(minutes=2):
-    #     print(f"[DEBUG] Time gap > 2 minutes. Recollecting 120-minute window...")
-    #     logger.info("Time gap too large. Collecting new 120-minute window.")
-    #     return _recollect_prediction_window(
-    #         file_path, queries, collector, end_time, instance_id, target_object
-    #     )
-
-    # if timedelta(minutes=1) < time_diff <= timedelta(minutes=2):
-    #     print(
-    #         f"[DEBUG] Time gap between 1-2 minutes. Updating with latest data point..."
-    #     )
-    #     logger.info("Updating with latest data point.")
-    #     return _update_prediction_data(
-    #         file_path,
-    #         existing_df,
-    #         queries,
-    #         collector,
-    #         end_time,
-    #         instance_id,
-    #         target_object,
-    #     )
-
-    # print(f"[DEBUG] Data is already up to date. Using existing data.")
-    # logger.info("Data is already up to date.")
-    # return existing_df
-
-
-# def _collect_initial_prediction_data(
-#     file_path: str,
-#     queries: Dict[str, str],
-#     collector: Collector,
-#     end_time: datetime,
-#     instance_id: int,
-#     target_object: str,
-# ) -> pd.DataFrame:
-#     """Collect initial prediction window (61 minutes)."""
-#     start_time = end_time - timedelta(minutes=60)
-#     all_data = {}
-
-#     all_data, _ = _collect_data_points(
-#         queries, start_time, end_time, all_data, collector
-#     )
-
-#     df = _convert_to_dataframe(all_data)
-#     df = _add_instance_column(df, instance_id)
-#     df = _apply_feature_engineering(df, target_object)
-
-#     df.to_csv(file_path, index=False)
-#     return df
 
 
 def _collect_initial_prediction_data(
-    file_path: str,
     queries: Dict[str, str],
     collector: Collector,
     end_time: datetime,
     instance_id: int,
     target_object: str,
+    svr_id: int,
+    world_id: int,
 ) -> pd.DataFrame:
     """Collect initial prediction window (61 minutes)."""
-    print(f"[DEBUG] _collect_initial_prediction_data called")
 
     start_time = end_time - timedelta(minutes=60)
-    print(f"[DEBUG] Collecting initial window: {start_time} ~ {end_time}")
-    print(f"[DEBUG] Number of queries: {len(queries)}")
 
     all_data = {}
 
@@ -573,12 +451,7 @@ def _collect_initial_prediction_data(
         queries, start_time, end_time, all_data, collector
     )
 
-    print(f"[DEBUG] Data points collected: {points_collected}")
-    print(f"[DEBUG] Unique timestamps: {len(all_data)}")
-
     df = _convert_to_dataframe(all_data)
-    print(f"[DEBUG] DataFrame shape after conversion: {df.shape}")
-
     df = df.set_index("timestamp")
     full_range = pd.date_range(df.index.min(), df.index.max(), freq="1min")
     df = df.reindex(full_range)
@@ -587,45 +460,11 @@ def _collect_initial_prediction_data(
     df["timestamp"] = pd.to_datetime(df["timestamp"])
     df = df.fillna(0)
 
-    df = _add_instance_column(df, instance_id)
-    print(f"[DEBUG] Instance column added. Instance ID: {instance_id}")
+    df = _add_instance_column(df, svr_id, world_id, instance_id)
 
     df = _apply_feature_engineering(df, target_object)
-    print(f"[DEBUG] Feature engineering applied. Final shape: {df.shape}")
-
-    df.to_csv(file_path, index=False)
-    print(f"[DEBUG] Data saved to: {file_path}")
-    print(f"[DEBUG] _collect_initial_prediction_data completed\n")
 
     return df
-
-
-# def _recollect_prediction_window(
-#     file_path: str,
-#     queries: Dict[str, str],
-#     collector: Collector,
-#     end_time: datetime,
-#     instance_id: int,
-#     target_object: str,
-# ) -> pd.DataFrame:
-#     """Recollect prediction window when gap is too large."""
-#     start_time = end_time - timedelta(minutes=PREDICTION_WINDOW_MINUTES)
-#     all_data = {}
-
-#     all_data, _ = _collect_data_points(
-#         queries, start_time, end_time, all_data, collector
-#     )
-
-#     df = _convert_to_dataframe(all_data)
-#     df = df.dropna()
-#     df = df.sort_values("timestamp").reset_index(drop=True)
-#     df = df.tail(MIN_PREDICTION_WINDOW)
-
-#     df = _add_instance_column(df, instance_id)
-#     df = _apply_feature_engineering(df, target_object)
-
-#     df.to_csv(file_path, index=False)
-#     return df
 
 
 def _recollect_prediction_window(
@@ -661,7 +500,7 @@ def _recollect_prediction_window(
     df = df.tail(MIN_PREDICTION_WINDOW)
     print(f"[DEBUG] After taking last 61 rows: {df.shape}")
 
-    df = _add_instance_column(df, instance_id)
+    df = _add_instance_column(df, svr_id, world_id, instance_id)
     df = _apply_feature_engineering(df, target_object)
     print(f"[DEBUG] After feature engineering: {df.shape}")
 
@@ -691,7 +530,7 @@ def _update_prediction_data(
 
     # Create new data point
     new_df = _convert_to_dataframe(all_data)
-    new_df = _add_instance_column(new_df, instance_id)
+    new_df = _add_instance_column(df, svr_id, world_id, instance_id)
     new_df = _apply_feature_engineering(new_df, target_object)
 
     # Remove oldest data point from existing data
@@ -724,9 +563,7 @@ def _collect_data_points(
 
     for metric_name, query in queries.items():
         logger.info(f"  Collecting: {metric_name}")
-
         result = collector.query_range(query, start_time, end_time, step="1m")
-
         if result and result.get("status") == "success":
             data = result.get("data", {}).get("result", [])
 
@@ -757,14 +594,18 @@ def _convert_to_dataframe(data: Dict) -> pd.DataFrame:
     df.index.name = "timestamp"
     df = df.reset_index()
     df = df.sort_values("timestamp")
+    df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
     df["timestamp"] = df["timestamp"].dt.floor("s")
     return df
 
 
-def _add_instance_column(df: pd.DataFrame, instance_id: int) -> pd.DataFrame:
-    """Add instance ID column to DataFrame."""
-    df.insert(1, "instance", instance_id)
-    df["instance"] = df["instance"].astype(int)  # Fixed typo: was "intance"
+def _add_instance_column(
+    df: pd.DataFrame, svr_id: int, world_id: int, instance_id: int
+) -> pd.DataFrame:
+    """Add instance-related ID columns to DataFrame."""
+    df.insert(1, "svr_id", int(svr_id))
+    df.insert(2, "world_id", int(world_id))
+    df.insert(3, "instance", int(instance_id))
     return df
 
 
